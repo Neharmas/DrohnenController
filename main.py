@@ -1,19 +1,26 @@
 import sys
-from token import VBAREQUAL
+import faulthandler
 
-import pygame
-
-from PyQt6.QtGui import QKeyEvent, QImage
+from PyQt6.QtCore import QObject, pyqtSignal, Qt, QTimer
+from PyQt6.QtGui import QKeyEvent, QImage, QPixmap, QWheelEvent, QCursor
 from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QMainWindow, QGridLayout, QVBoxLayout
 
-from layout_colorwidget import Color
+import cv2 as cv
 
+import socket
+import threading
+import pygame
 
 def clamp(number, minimum, maximum):
     return max(minimum, min(number, maximum))
 
-def normalizeInput(left, right):
+def normalize_input(left, right):
     return left * -1 + right
+
+
+class SocketBridge(QObject):
+    client_connected = pyqtSignal(object)  # Signal mit dem Socket-Objekt
+    client_disconnected = pyqtSignal(object)
 
 class ControllerEvent:
     def __init__(self, window):
@@ -29,6 +36,7 @@ class ControllerEvent:
 
         self.done = False
 
+        self.deadzone = 0.2
         self.controller_input_map = {
             "buttons" : {
                 0: "move_z_down", 1: "move_z_up",
@@ -49,19 +57,18 @@ class ControllerEvent:
                              "zoom_in": 0, "zoom_out" : 0
         }
 
-    def mapJoystickToKeyboard(self):
-        pass
-        # TODO: SEPERATE INPUT AND MAP IT TO THE MAIN WINDOW APPLICATION
-        #       WRITE SOCKET OUTPUT TO RASPBERRY PI
-
-    def eventLoop(self):
+    def event_loop(self):
         event_list = pygame.event.get()
         if len(event_list) == 0:
             return
         for event in event_list:
             event_type = event.type
-            if event_type in [4352, 1541]:
+
+            # 4352 -> AudioDeviceAdded event
+            # 1541 -> JoyDeviceAdded event
+            if event_type in [4352]:
                 return
+            prev_input = self.pressed_keys.copy()
             if event_type == pygame.JOYBUTTONDOWN:
                 map = self.controller_input_map["buttons"]
                 if event.button in map:
@@ -80,41 +87,79 @@ class ControllerEvent:
                 if event.axis in [0, 1]:
                     value*=-1
 
-                self.pressed_keys[map[event.axis]] = value
-                print(self.pressed_keys["turn_left"])
+                #if self.pressed_keys[map[event.axis]] == value:
+                #    return
+
+                if abs(value) < self.deadzone:
+                    self.pressed_keys[map[event.axis]] = 0
+                else:
+                    self.pressed_keys[map[event.axis]] = value
 
             # Handle hotplugging
             if event_type == pygame.JOYDEVICEADDED:
                 # This event will be generated when the program starts for every
                 # joystick, filling up the list without needing to create them manually.
                 joy = pygame.joystick.Joystick(event.device_index)
-                self.joysticks[joy.get_instance_id()] = joy
+                self.joysticks[joy.get_instance_id() - 1] = joy
                 print(f"Joystick {joy.get_instance_id()} connected")
 
             if event.type == pygame.JOYDEVICEREMOVED:
                 del self.joysticks[event.instance_id]
                 print(f"Joystick {event.instance_id} disconnected")
 
-            move_z = normalizeInput(self.pressed_keys["move_z_down"], self.pressed_keys["move_z_up"])
-            rotate = normalizeInput(self.pressed_keys["turn_left"], self.pressed_keys["turn_right"])
-            self.window.updateInput(self.pressed_keys["move_x"], self.pressed_keys["move_y"], move_z, rotate, True)
-
+            if prev_input != self.pressed_keys:
+                move_z = normalize_input(self.pressed_keys["move_z_down"], self.pressed_keys["move_z_up"])
+                rotate = normalize_input(self.pressed_keys["turn_left"], self.pressed_keys["turn_right"])
+                #self.window.update_input(self.pressed_keys["move_x"], self.pressed_keys["move_y"], move_z, rotate, True)
+                print("update")
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
+        self.conn = None
         self.controllerInput = ControllerEvent(self)
 
-        self.pressed_keys = {"move_forward", "move_left", "move_right", "move_back", "move_up", "move_down", "turn_right", "turn_left"}
-        self.pressed_keys.clear()
-        self.move_x = 0
-        self.move_y = 0
-        self.move_z = 0
-        self.rotate = 0
+        self.isLeftMouseClicked = False
+        self.last_mouse_pos = None
+
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_loop)
+        self.timer.start(16)
+
 
         layout = QVBoxLayout()
-        self.label = QLabel("X: " + str(self.move_x) + "\nY: " + str(self.move_y) + "\nZ: " + str(self.move_z) + "\nROT: " + str(self.rotate) + "\n")
+
+        ## Display Image
+
+        #img = cv.imread(cv.samples.findFile("E:/Zeichnung/2019/2D/Dragon Ball/Another Devil.png"), cv.IMREAD_COLOR_RGB)
+
+        #image = QImage(img, img.shape[1], img.shape[0], 3*img.shape[1], QImage().format().Format_RGB888)
+        #qpixmap = QPixmap.fromImage(image)
+
+        #imageQT = QLabel()
+        #imageQT.setScaledContents(True)
+        #imageQT.setMinimumSize(1, 1)
+        #imageQT.setPixmap(qpixmap)
+        #layout.addWidget(imageQT)
+
+        # Beispiel-UI
+        self.connection_status = QLabel("Kein Client verbunden")
+        self.connection_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.connection_status)
+
+        #self.pressed_keys = {"move_forward", "move_left", "move_right", "move_back", "move_up", "move_down", "turn_right", "turn_left"}
+
+        self.pressed_keys = {
+            ## Drone Body
+            "move_z": 0, "move_y": 0, "move_x": 0, "rotate" : 0,
+            ## Camera
+            "look_x": 0, "look_y": 0, "zoom": 0,
+            "is_infrared": False
+        }
+
+        self.label = QLabel()
+        self.update_input()
         layout.addWidget(self.label)
 
         widget = QWidget()
@@ -127,90 +172,153 @@ class MainWindow(QMainWindow):
         super().closeEvent(a0)
 
     def keyPressEvent(self, event):
-        if isinstance(event, QKeyEvent):
-            key_text = event.text().strip()
-            match key_text:
-                case "w":
-                    self.pressed_keys.add("move_forward")
-                case "s":
-                    self.pressed_keys.add("move_back")
-                case "d":
-                    self.pressed_keys.add("move_right")
-                case "a":
-                    self.pressed_keys.add("move_left")
-                case "":
-                    # Keyboard = Space
-                    if event.key() == 32:
-                        self.pressed_keys.add("move_up")
-                    # Keyboard = Control/Steuerung
-                    elif event.key() == 16777249:
-                        self.pressed_keys.add("move_down")
-                case "q":
-                    self.pressed_keys.add("turn_left")
-                case "e":
-                    self.pressed_keys.add("turn_right")
-
-            self.updateInput(self.move_x, self.move_y, self.move_z, self.rotate)
-            #self.key_label.setText(f"Last Key Pressed: {key_text}")
+        key_text = event.text().strip()
+        match key_text:
+            case "w":
+                self.pressed_keys["move_x"] += 1
+            case "s":
+                self.pressed_keys["move_x"] -= 1
+            case "d":
+                self.pressed_keys["move_y"] -= 1
+            case "a":
+                self.pressed_keys["move_y"] += 1
+            case "":
+                # Keyboard = Space
+                if event.key() == 32:
+                    self.pressed_keys["move_z"] = 1
+                # Keyboard = Control/Steuerung
+                elif event.key() == 16777249:
+                    self.pressed_keys["move_z"] = -1
+            case "q":
+                self.pressed_keys["rotate"] = 1
+            case "e":
+                self.pressed_keys["rotate"] = -1
+            case "f":
+                self.pressed_keys["is_infrared"] = not self.pressed_keys["is_infrared"]
 
     def keyReleaseEvent(self, event):
-        if isinstance(event, QKeyEvent):
-            key_text = event.text().strip()
-            print(key_text)
-            match key_text:
-                case "w":
-                    self.pressed_keys.remove("move_forward")
-                case "s":
-                    self.pressed_keys.remove("move_back")
-                case "d":
-                    self.pressed_keys.remove("move_right")
-                case "a":
-                    self.pressed_keys.remove("move_left")
-                case "":
-                    # Keyboard = Space
-                    if event.key() == 32:
-                        self.pressed_keys.remove("move_up")
-                    # Keyboard = Control/Steuerung
-                    elif event.key() == 16777249:
-                        self.pressed_keys.remove("move_down")
-                case "q":
-                    self.pressed_keys.remove("turn_left")
-                case "e":
-                    self.pressed_keys.remove("turn_right")
+        key_text = event.text().strip()
+        match key_text:
+            case "w" | "s":
+                self.pressed_keys["move_x"] = 0
+            case "d" | "a":
+                self.pressed_keys["move_y"] = 0
+            case "":
+                # Keyboard = Space und Control/Steuerung
+                if event.key() in [32, 16777249]:
+                    self.pressed_keys["move_z"] = 0
+            case "q" | "e":
+                self.pressed_keys["rotate"] = 0
 
-            self.updateInput(self.move_x, self.move_y, self.move_z, self.rotate)
-            #self.key_label.setText(f"Key Released: {key_text}")
+    def mousePressEvent(self, event):
+        self.isLeftMouseClicked = True
 
-    def updateInput(self, move_x, move_y, move_z, rotate, controller=False):
-        self.move_x = self.clampMovement(move_x, "move_forward", "move_back", controller)
-        self.move_y = self.clampMovement(move_y, "move_left", "move_right", controller)
-        self.move_z = self.clampMovement(move_z, "move_up", "move_down", controller)
-        self.rotate = self.clampMovement(rotate, "turn_right", "turn_left", controller)
+    def mouseReleaseEvent(self, event):
+        self.isLeftMouseClicked = False
 
-        self.label.setText("X: " + str(self.move_x) + "\nY: " + str(self.move_y) + "\nZ: " + str(self.move_z) + "\nROT: " + str(self.rotate) + "\n")
-        #print("X: " + str(self.move_x) + "\nY: " + str(self.move_y) + "\nZ: " + str(self.move_z) + "\nrot " + str(self.rotate) + "\n")
+    def wheelEvent(self, event):
+        wheel_rot = event.angleDelta().y()
+        self.pressed_keys["zoom"] += clamp(wheel_rot, -1, 1)
 
-    def clampMovement(self, number, first_input, second_input, controller):
-        if controller:
-            return clamp(number, -1, 1)
-        if first_input in self.pressed_keys:
-            number += 1
-        if second_input in self.pressed_keys:
-            number -= 1
-        if first_input not in self.pressed_keys and second_input not in self.pressed_keys:
-            number = 0
-        return clamp(number, -1, 1)
+    def update_loop(self):
+        if self.isLeftMouseClicked:
+            pos = QCursor.pos()
+            if self.last_mouse_pos is None:
+                self.last_mouse_pos = pos
+                return
+            dx = pos.x() - self.last_mouse_pos.x()
+            dy = pos.y() - self.last_mouse_pos.y()
+            self.pressed_keys["look_x"] = dx
+            self.pressed_keys["look_y"] = -1 * dy
+            self.last_mouse_pos = pos
+        else:
+            self.pressed_keys["look_x"] = 0
+            self.pressed_keys["look_y"] = 0
 
+        self.update_input()
+
+    def update_input(self):
+        for key, value in self.pressed_keys.items():
+            if key == "is_infrared":
+                continue
+            self.pressed_keys[key] = clamp(value, -1, 1)
+
+        data = ""
+        for key, value in self.pressed_keys.items():
+            data += f"{key}: {value}\n"
+        self.label.setText(data)
+        self.send_input_data_over_socket(data)
+
+    def set_client_connection(self, conn):
+        """Wird vom Signal aufgerufen (Hauptthread)."""
+        self.conn = conn
+        self.connection_status.setText("Client verbunden")
+        print("Client im GUI registriert.")
+
+    def clear_client_connection(self):
+        """Kann aufgerufen werden, wenn Verbindung beendet wird."""
+        self.conn = None
+        self.connection_status.setText("Kein Client verbunden")
+        print("Client getrennt.")
+
+    def send_input_data_over_socket(self, data):
+        if self.conn:  # ✅ Check if connected
+            try:
+                self.conn.send(bytes(data, "utf-8"))
+            except Exception as e:
+                self.conn = None
+                print(f"Send failed: {e}")
+
+def loop_controller(window):
+    while not window.controllerInput.done:
+        window.controllerInput.event_loop()
+    pygame.quit()
+
+def handle_client(server_socket, on_client_connect, on_client_disconnect):
+    conn, addr = server_socket.accept()
+    print(f"Connected by: {addr}")
+    on_client_connect(conn)  # Pass conn to GUI or wherever needed
+    try:
+        while True:
+            data = conn.recv(1024)
+            if not data:
+                break
+            print(f"Received from {addr}: {data.decode()}")
+            conn.sendall(b"Echo: " + data)
+    finally:
+        conn.close()
+        print(f"Connection closed: {addr}")
+        on_client_disconnect(conn)
+
+def create_socket():
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server_socket.bind(("0.0.0.0", 8080))
+    server_socket.listen()
+    print("Server Listening...")
+    return server_socket
 
 def main():
+    #faulthandler.enable()
+    server_socket = create_socket()
+
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
 
-    while not window.controllerInput.done:
-        window.controllerInput.eventLoop()
+    bridge = SocketBridge()
+    bridge.client_connected.connect(window.set_client_connection)
+    bridge.client_disconnected.connect(window.clear_client_connection)
 
-    pygame.quit()
+    # handle controller input in the background
+    threading.Thread(target=loop_controller, args=(window,), daemon=True).start()
+
+    # handle client in the background
+    threading.Thread(
+        target=handle_client,
+        args=(server_socket, bridge.client_connected.emit, bridge.client_disconnected.emit),
+        daemon=True
+    ).start()
 
     sys.exit(app.exec())
 
