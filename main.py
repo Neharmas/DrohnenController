@@ -1,7 +1,10 @@
+import struct
 import sys
 import faulthandler
 
-from PyQt6.QtCore import QObject, pyqtSignal, Qt, QTimer
+import cv2
+import numpy as np
+from PyQt6.QtCore import QObject, pyqtSignal, Qt, QTimer, QSocketNotifier
 from PyQt6.QtGui import QKeyEvent, QImage, QPixmap, QWheelEvent, QCursor
 from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QMainWindow, QGridLayout, QVBoxLayout
 
@@ -21,6 +24,7 @@ def normalize_input(left, right):
 class SocketBridge(QObject):
     client_connected = pyqtSignal(object)  # Signal mit dem Socket-Objekt
     client_disconnected = pyqtSignal(object)
+    frame_received = pyqtSignal(bytes)
 
 class ControllerEvent:
     def __init__(self, window):
@@ -114,10 +118,11 @@ class ControllerEvent:
                 print("update")
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, bridge: SocketBridge):
         super().__init__()
 
         self.conn = None
+
         self.controllerInput = ControllerEvent(self)
 
         self.isLeftMouseClicked = False
@@ -127,28 +132,27 @@ class MainWindow(QMainWindow):
         self.timer.timeout.connect(self.update_loop)
         self.timer.start(16)
 
-
         layout = QVBoxLayout()
 
-        ## Display Image
-
-        #img = cv.imread(cv.samples.findFile("E:/Zeichnung/2019/2D/Dragon Ball/Another Devil.png"), cv.IMREAD_COLOR_RGB)
-
-        #image = QImage(img, img.shape[1], img.shape[0], 3*img.shape[1], QImage().format().Format_RGB888)
-        #qpixmap = QPixmap.fromImage(image)
-
-        #imageQT = QLabel()
-        #imageQT.setScaledContents(True)
-        #imageQT.setMinimumSize(1, 1)
-        #imageQT.setPixmap(qpixmap)
-        #layout.addWidget(imageQT)
+        # video label
+        self.video_label = QLabel("Waiting for video...")
+        self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # Beispiel-UI
         self.connection_status = QLabel("Kein Client verbunden")
         self.connection_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.connection_status)
 
-        #self.pressed_keys = {"move_forward", "move_left", "move_right", "move_back", "move_up", "move_down", "turn_right", "turn_left"}
+        central = QWidget()
+        layout = QVBoxLayout(central)
+        layout.addWidget(self.video_label, stretch=1)
+        layout.addWidget(self.connection_status)
+        self.setCentralWidget(central)
+
+        # connect bridge signals
+        bridge.client_connected.connect(self.set_client_connection)
+        bridge.client_disconnected.connect(self.clear_client_connection)
+        bridge.frame_received.connect(self.on_frame)
 
         self.pressed_keys = {
             ## Drone Body
@@ -247,7 +251,7 @@ class MainWindow(QMainWindow):
         for key, value in self.pressed_keys.items():
             data += f"{key}: {value}\n"
         self.label.setText(data)
-        self.send_input_data_over_socket(data)
+        self.send_input_data_over_socket(self.pressed_keys)
 
     def set_client_connection(self, conn):
         """Wird vom Signal aufgerufen (Hauptthread)."""
@@ -259,7 +263,30 @@ class MainWindow(QMainWindow):
         """Kann aufgerufen werden, wenn Verbindung beendet wird."""
         self.conn = None
         self.connection_status.setText("Kein Client verbunden")
+
+        self.video_label.clear()
+        self.video_label.setText("Waiting for video...")
         print("Client getrennt.")
+
+    def on_frame(self, frame_data: bytes):
+        np_arr = np.frombuffer(frame_data, np.uint8)
+        img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        if img is None:
+            return
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        h, w, ch = img.shape
+        qimg = QImage(img.data, w, h, ch * w, QImage.Format.Format_RGB888)
+        pixmap = QPixmap.fromImage(qimg)
+
+        # keep aspect ratio with window
+        self.video_label.setPixmap(
+            pixmap.scaled(
+                self.video_label.size(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+        )
 
     def send_input_data_over_socket(self, data):
         if self.conn:  # ✅ Check if connected
@@ -274,21 +301,42 @@ def loop_controller(window):
         window.controllerInput.event_loop()
     pygame.quit()
 
-def handle_client(server_socket, on_client_connect, on_client_disconnect):
-    conn, addr = server_socket.accept()
-    print(f"Connected by: {addr}")
-    on_client_connect(conn)  # Pass conn to GUI or wherever needed
-    try:
-        while True:
-            data = conn.recv(1024)
-            if not data:
-                break
-            print(f"Received from {addr}: {data.decode()}")
-            conn.sendall(b"Echo: " + data)
-    finally:
-        conn.close()
-        print(f"Connection closed: {addr}")
-        on_client_disconnect(conn)
+def recv_all(conn, length):
+    buf = b''
+    while len(buf) < length:
+        data = conn.recv(length - len(buf))
+        if not data:
+            return None
+        buf += data
+    return buf
+
+def handle_client(server_socket, bridge: SocketBridge):
+    while True:
+        conn, addr = server_socket.accept()
+        print(f"🔗 Connected by: {addr}")
+
+        conn.setblocking(False)
+
+        bridge.client_connected.emit(conn)
+
+        try:
+            while True:
+                len_bytes = recv_all(conn, 4)
+                if not len_bytes:
+                    break
+                length = struct.unpack(">I", len_bytes)[0]
+                frame_data = recv_all(conn, length)
+                if not frame_data:
+                    break
+                bridge.frame_received.emit(frame_data)
+
+        except Exception as e:
+            print(f"⚠️ Client error: {e}")
+
+        finally:
+            conn.close()
+            print(f"❌ Connection closed: {addr}")
+            bridge.client_disconnected.emit(conn)
 
 def create_socket():
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -299,16 +347,16 @@ def create_socket():
     return server_socket
 
 def main():
-    #faulthandler.enable()
     server_socket = create_socket()
 
     app = QApplication(sys.argv)
-    window = MainWindow()
+    bridge = SocketBridge()
+    window = MainWindow(bridge)
     window.show()
 
-    bridge = SocketBridge()
-    bridge.client_connected.connect(window.set_client_connection)
-    bridge.client_disconnected.connect(window.clear_client_connection)
+    #bridge = SocketBridge()
+    #bridge.client_connected.connect(window.set_client_connection)
+    #bridge.client_disconnected.connect(window.clear_client_connection)
 
     # handle controller input in the background
     threading.Thread(target=loop_controller, args=(window,), daemon=True).start()
@@ -316,7 +364,7 @@ def main():
     # handle client in the background
     threading.Thread(
         target=handle_client,
-        args=(server_socket, bridge.client_connected.emit, bridge.client_disconnected.emit),
+        args=(server_socket, bridge),
         daemon=True
     ).start()
 
