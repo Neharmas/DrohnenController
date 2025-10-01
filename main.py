@@ -1,14 +1,11 @@
-import struct
 import sys
-import faulthandler
+import struct
 
 import cv2
 import numpy as np
-from PyQt6.QtCore import QObject, pyqtSignal, Qt, QTimer, QSocketNotifier
-from PyQt6.QtGui import QKeyEvent, QImage, QPixmap, QWheelEvent, QCursor
-from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QMainWindow, QGridLayout, QVBoxLayout
-
-import cv2 as cv
+from PyQt6.QtCore import QObject, pyqtSignal, Qt, QTimer
+from PyQt6.QtGui import QImage, QPixmap, QCursor
+from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QMainWindow, QVBoxLayout
 
 import socket
 import threading
@@ -19,7 +16,6 @@ def clamp(number, minimum, maximum):
 
 def normalize_input(left, right):
     return left * -1 + right
-
 
 class SocketBridge(QObject):
     client_connected = pyqtSignal(object)  # Signal mit dem Socket-Objekt
@@ -189,14 +185,14 @@ class MainWindow(QMainWindow):
             case "":
                 # Keyboard = Space
                 if event.key() == 32:
-                    self.pressed_keys["move_z"] = 1
+                    self.pressed_keys["move_z"] += 1
                 # Keyboard = Control/Steuerung
                 elif event.key() == 16777249:
-                    self.pressed_keys["move_z"] = -1
+                    self.pressed_keys["move_z"] -= 1
             case "q":
-                self.pressed_keys["rotate"] = 1
+                self.pressed_keys["rotate"] += 1
             case "e":
-                self.pressed_keys["rotate"] = -1
+                self.pressed_keys["rotate"] -= 1
             case "f":
                 self.pressed_keys["is_infrared"] = not self.pressed_keys["is_infrared"]
 
@@ -251,7 +247,7 @@ class MainWindow(QMainWindow):
         for key, value in self.pressed_keys.items():
             data += f"{key}: {value}\n"
         self.label.setText(data)
-        self.send_input_data_over_socket(self.pressed_keys)
+        self.send_input_data_over_socket(data)
 
     def set_client_connection(self, conn):
         """Wird vom Signal aufgerufen (Hauptthread)."""
@@ -265,7 +261,7 @@ class MainWindow(QMainWindow):
         self.connection_status.setText("Kein Client verbunden")
 
         self.video_label.clear()
-        self.video_label.setText("Waiting for video...")
+        self.video_label.setText("Kein Video...")
         print("Client getrennt.")
 
     def on_frame(self, frame_data: bytes):
@@ -315,8 +311,6 @@ def handle_client(server_socket, bridge: SocketBridge):
         conn, addr = server_socket.accept()
         print(f"🔗 Connected by: {addr}")
 
-        conn.setblocking(False)
-
         bridge.client_connected.emit(conn)
 
         try:
@@ -353,10 +347,6 @@ def main():
     bridge = SocketBridge()
     window = MainWindow(bridge)
     window.show()
-
-    #bridge = SocketBridge()
-    #bridge.client_connected.connect(window.set_client_connection)
-    #bridge.client_disconnected.connect(window.clear_client_connection)
 
     # handle controller input in the background
     threading.Thread(target=loop_controller, args=(window,), daemon=True).start()
