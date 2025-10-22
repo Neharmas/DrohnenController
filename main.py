@@ -218,7 +218,8 @@ class MainWindow(QMainWindow):
 
     def wheelEvent(self, event):
         wheel_rot = event.angleDelta().y()
-        self.pressed_keys["zoom"] += clamp(wheel_rot, -1, 1)
+        self.pressed_keys["zoom"] += np.sign(wheel_rot)
+        self.pressed_keys["zoom"] = clamp(self.pressed_keys["zoom"], 0, 5)
 
     def update_loop(self):
         if self.isLeftMouseClicked:
@@ -238,11 +239,6 @@ class MainWindow(QMainWindow):
         self.update_input()
 
     def update_input(self):
-        for key, value in self.pressed_keys.items():
-            if key == "is_infrared":
-                continue
-            self.pressed_keys[key] = clamp(value, -1, 1)
-
         data = ""
         for key, value in self.pressed_keys.items():
             data += f"{key}: {value}\n"
@@ -285,12 +281,13 @@ class MainWindow(QMainWindow):
         )
 
     def send_input_data_over_socket(self, data):
-        if self.conn:  # ✅ Check if connected
-            try:
-                self.conn.send(bytes(data, "utf-8"))
-            except Exception as e:
-                self.conn = None
-                print(f"Send failed: {e}")
+        if not self.conn: # ✅ Check if connected
+            return
+        try:
+            self.conn.send(bytes(data, "utf-8"))
+        except Exception as e:
+            self.conn = None
+            print(f"Send failed: {e}")
 
 def loop_controller(window):
     while not window.controllerInput.done:
