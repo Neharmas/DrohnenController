@@ -1,3 +1,4 @@
+import math
 import sys
 import struct
 
@@ -5,7 +6,8 @@ import cv2
 import numpy as np
 from PyQt6.QtCore import QObject, pyqtSignal, Qt, QTimer
 from PyQt6.QtGui import QImage, QPixmap, QCursor
-from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QMainWindow, QVBoxLayout
+from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QMainWindow, QVBoxLayout, QHBoxLayout, QGraphicsView
+import MapWidget
 
 import socket
 import threading
@@ -117,34 +119,10 @@ class MainWindow(QMainWindow):
     def __init__(self, bridge: SocketBridge):
         super().__init__()
 
+        self.resize(1280, 720)
+        self.setMinimumSize(800, 600)
+
         self.conn = None
-
-        self.controllerInput = ControllerEvent(self)
-
-        self.isLeftMouseClicked = False
-        self.last_mouse_pos = None
-
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.update_loop)
-        self.timer.start(16)
-
-        layout = QVBoxLayout()
-
-        # video label
-        self.video_label = QLabel("Waiting for video...")
-        self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        # Beispiel-UI
-        self.connection_status = QLabel("Kein Client verbunden")
-        self.connection_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.connection_status)
-
-        central = QWidget()
-        layout = QVBoxLayout(central)
-        layout.addWidget(self.video_label, stretch=1)
-        layout.addWidget(self.connection_status)
-        self.setCentralWidget(central)
-
         # connect bridge signals
         bridge.client_connected.connect(self.set_client_connection)
         bridge.client_disconnected.connect(self.clear_client_connection)
@@ -152,20 +130,64 @@ class MainWindow(QMainWindow):
 
         self.pressed_keys = {
             ## Drone Body
-            "move_z": 0, "move_y": 0, "move_x": 0, "rotate" : 0,
+            "move_z": 0, "move_y": 0, "move_x": 0, "rotate": 0,
             ## Camera
             "look_x": 0, "look_y": 0, "zoom": 0,
             "is_infrared": False
         }
+        self.isLeftMouseClicked = False
+        self.last_mouse_pos = None
+        self.controllerInput = ControllerEvent(self)
 
-        self.label = QLabel()
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_loop)
+        self.timer.start(16)
+
+        # GUI
+        central = QWidget(self)
+        self.setCentralWidget(central)
+
+        layout = QHBoxLayout(central)
+
+        # Videofeed
+        self.video_label = QLabel("Kein Video...")
+        self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.video_label.setStyleSheet("background-color: black;")
+        layout.addWidget(self.video_label, stretch=1)
+
+        # === Minimap Overlay ===
+        self.map_widget = MapWidget.MapWidgetNew()
+        self.minimap = QGraphicsView(self.map_widget, self.video_label)
+        self.minimap.setStyleSheet("background: rgba(40, 40, 40, 122); border: solid; border-color: grey; border-width: 1px;")
+        self.minimap.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.minimap.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.minimap.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        padding = 10
+
+        self.minimap.setGeometry(padding, padding, 200, 200)  # top-left overlay
+
+        # === Debug Info ===
+        self.debug_input_label = QLabel()
+        self.debug_input_label.setStyleSheet("color: white; background-color: rgba(0,0,0,100); padding: 5px;")
+        layout.addWidget(self.debug_input_label)
         self.update_input()
-        layout.addWidget(self.label)
 
-        widget = QWidget()
-        widget.setLayout(layout)
-        self.setCentralWidget(widget)
-        widget.show()
+        self.show()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+
+        if hasattr(self, "minimap") and self.minimap is not None:
+            # Dynamische Größe (z. B. 20% der Videobreite)
+            video_width = self.video_label.width()
+            video_height = self.video_label.height()
+
+            #map_size = self.minimap.size().width()
+
+            # Position unten links im Video
+            #margin = 20
+            #self.minimap.move(margin, video_height - map_size - margin)
 
     def closeEvent(self, a0):
         self.controllerInput.done = True
@@ -242,19 +264,17 @@ class MainWindow(QMainWindow):
         data = ""
         for key, value in self.pressed_keys.items():
             data += f"{key}: {value}\n"
-        self.label.setText(data)
+        self.debug_input_label.setText(data)
         self.send_input_data_over_socket(data)
 
     def set_client_connection(self, conn):
         """Wird vom Signal aufgerufen (Hauptthread)."""
         self.conn = conn
-        self.connection_status.setText("Client verbunden")
         print("Client im GUI registriert.")
 
     def clear_client_connection(self):
         """Kann aufgerufen werden, wenn Verbindung beendet wird."""
         self.conn = None
-        self.connection_status.setText("Kein Client verbunden")
 
         self.video_label.clear()
         self.video_label.setText("Kein Video...")
