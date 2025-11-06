@@ -32,33 +32,34 @@ class ControllerEvent:
         pygame.init()
 
         self.joysticks = []
-        for i in range(pygame.joystick.get_count()):
-            self.joysticks.append(pygame.joystick.Joystick(i))
-            self.joysticks[i].init()
-
         self.done = False
 
-        self.deadzone = 0.2
+        self.deadzone = 0.3
         self.controller_input_map = {
-            "buttons" : {
-                0: "move_z_down", 1: "move_z_up",
-                4: "turn_left", 5: "turn_right"
+            "buttons": {
+                0:  ("move_z", -1),  # move_z_down
+                1:  ("move_z", +1),  # move_z_up
+                3:  ("is_infrared", "toggle"),
+                9:  ("rotate", +1),  # turn_left
+                10: ("rotate", -1),  # turn_right
+                11: ("zoom", +1),
+                12: ("zoom", -1)
             },
-            "axes" : {
-                0: "move_y", 1: "move_x",
-                3: "look_x", 4: "look_y",
-                2: "zoom_out", 5: "zoom_in",
+            "axes": {
+                0: "move_y",
+                1: "move_x",
+                2: "look_x",
+                3: "look_y",
             }
         }
 
         self.pressed_keys = {
-                            "move_z_down" : 0, "move_z_up" : 0,
-                             "turn_left" : 0, "turn_right": 0,
-                             "move_y" : 0, "move_x" : 0,
-                             "look_x" : 0, "look_y" : 0,
-                             "zoom_in": 0, "zoom_out" : 0
+            ## Drone Body
+            "move_z": 0, "move_y": 0, "move_x": 0, "rotate": 0,
+            ## Camera
+            "look_x": 0, "look_y": 0, "zoom": 0,
+            "is_infrared": False
         }
-
     def event_loop(self):
         event_list = pygame.event.get()
         if len(event_list) == 0:
@@ -70,39 +71,49 @@ class ControllerEvent:
             # 1541 -> JoyDeviceAdded event
             if event_type in [4352]:
                 return
+
             prev_input = self.pressed_keys.copy()
-            if event_type == pygame.JOYBUTTONDOWN:
-                map = self.controller_input_map["buttons"]
-                if event.button in map:
-                    self.pressed_keys[map[event.button]] = 1
 
-            if event_type == pygame.JOYBUTTONUP:
-                map = self.controller_input_map["buttons"]
-                if event.button in map:
-                    self.pressed_keys[map[event.button]] = 0
+            # --- Button pressed ---
+            if event.type == pygame.JOYBUTTONDOWN:
+                if event.button in self.controller_input_map["buttons"]:
+                    key, value = self.controller_input_map["buttons"][event.button]
+                    if key == "is_infrared":
+                        self.pressed_keys[key] = not self.pressed_keys[key]
+                    else:
+                        self.pressed_keys[key] += value
+                    self.pressed_keys["zoom"] = clamp(self.pressed_keys["zoom"], 0, 2)
 
-            if event_type == pygame.JOYAXISMOTION:
-                map = self.controller_input_map["axes"]
-                value = event.value
+            # --- Button released ---
+            if event.type == pygame.JOYBUTTONUP:
+                if event.button in self.controller_input_map["buttons"]:
+                    key, value = self.controller_input_map["buttons"][event.button]
+                    if key not in ["is_infrared", "zoom"]:  # toggle bleibt wie er ist
+                        self.pressed_keys[key] -= value
 
-                # Inverted for some reason
-                if event.axis in [0, 1]:
-                    value*=-1
+            # --- Controller Achsen (analog sticks, trigger) ---
+            if event.type == pygame.JOYAXISMOTION:
+                if event.axis in self.controller_input_map["axes"]:
+                    key = self.controller_input_map["axes"][event.axis]
+                    value = event.value
 
-                #if self.pressed_keys[map[event.axis]] == value:
-                #    return
+                    ## Invertiere X-/Y-Achsen vom Stick
+                    if event.axis == 1:
+                        value *= -1
 
-                if abs(value) < self.deadzone:
-                    self.pressed_keys[map[event.axis]] = 0
-                else:
-                    self.pressed_keys[map[event.axis]] = value
+                    # Deadzone anwenden
+                    if abs(value) < self.deadzone:
+                        value = 0
+
+                    self.pressed_keys[key] = value
 
             # Handle hotplugging
             if event_type == pygame.JOYDEVICEADDED:
                 # This event will be generated when the program starts for every
                 # joystick, filling up the list without needing to create them manually.
                 joy = pygame.joystick.Joystick(event.device_index)
-                self.joysticks[joy.get_instance_id() - 1] = joy
+                joy.init()
+                self.joysticks.append(joy)
                 print(f"Joystick {joy.get_instance_id()} connected")
 
             if event.type == pygame.JOYDEVICEREMOVED:
@@ -110,10 +121,7 @@ class ControllerEvent:
                 print(f"Joystick {event.instance_id} disconnected")
 
             if prev_input != self.pressed_keys:
-                move_z = normalize_input(self.pressed_keys["move_z_down"], self.pressed_keys["move_z_up"])
-                rotate = normalize_input(self.pressed_keys["turn_left"], self.pressed_keys["turn_right"])
-                #self.window.update_input(self.pressed_keys["move_x"], self.pressed_keys["move_y"], move_z, rotate, True)
-                print("update")
+                self.window.pressed_keys = self.pressed_keys
 
 class MainWindow(QMainWindow):
     def __init__(self, bridge: SocketBridge):
@@ -128,6 +136,18 @@ class MainWindow(QMainWindow):
         bridge.client_disconnected.connect(self.clear_client_connection)
         bridge.frame_received.connect(self.on_frame)
 
+        # Richtung der Tastendrucke (Taste → Key in pressed_keys + Richtung)
+        self.KEY_MAP = {
+            Qt.Key.Key_W: ("move_x", +1),
+            Qt.Key.Key_S: ("move_x", -1),
+            Qt.Key.Key_A: ("move_y", +1),
+            Qt.Key.Key_D: ("move_y", -1),
+            Qt.Key.Key_Space: ("move_z", +1),
+            Qt.Key.Key_Control: ("move_z", -1),
+            Qt.Key.Key_Q: ("rotate", +1),
+            Qt.Key.Key_E: ("rotate", -1),
+        }
+
         self.pressed_keys = {
             ## Drone Body
             "move_z": 0, "move_y": 0, "move_x": 0, "rotate": 0,
@@ -135,9 +155,11 @@ class MainWindow(QMainWindow):
             "look_x": 0, "look_y": 0, "zoom": 0,
             "is_infrared": False
         }
-        self.isLeftMouseClicked = False
+
+        self.is_left_mouse_clicked = False
+        self.prev_is_left_mouse_clicked = False
         self.last_mouse_pos = None
-        self.controllerInput = ControllerEvent(self)
+        self.controller_input = ControllerEvent(self)
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_loop)
@@ -164,7 +186,6 @@ class MainWindow(QMainWindow):
         self.minimap.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         padding = 10
-
         self.minimap.setGeometry(padding, padding, 200, 200)  # top-left overlay
 
         # === Debug Info ===
@@ -190,74 +211,61 @@ class MainWindow(QMainWindow):
             #self.minimap.move(margin, video_height - map_size - margin)
 
     def closeEvent(self, a0):
-        self.controllerInput.done = True
+        self.controller_input.done = True
         super().closeEvent(a0)
 
     def keyPressEvent(self, event):
-        key_text = event.text().strip()
-        match key_text:
-            case "w":
-                self.pressed_keys["move_x"] += 1
-            case "s":
-                self.pressed_keys["move_x"] -= 1
-            case "d":
-                self.pressed_keys["move_y"] -= 1
-            case "a":
-                self.pressed_keys["move_y"] += 1
-            case "":
-                # Keyboard = Space
-                if event.key() == 32:
-                    self.pressed_keys["move_z"] += 1
-                # Keyboard = Control/Steuerung
-                elif event.key() == 16777249:
-                    self.pressed_keys["move_z"] -= 1
-            case "q":
-                self.pressed_keys["rotate"] += 1
-            case "e":
-                self.pressed_keys["rotate"] -= 1
-            case "f":
-                self.pressed_keys["is_infrared"] = not self.pressed_keys["is_infrared"]
+        key = event.key()
+
+        if key in self.KEY_MAP:
+            axis, direction = self.KEY_MAP[key]
+            # Nur erhöhen, wenn aktuell "neutral" in diese Richtung
+            if self.pressed_keys[axis] == 0:
+                self.pressed_keys[axis] += direction
+
+        elif key == Qt.Key.Key_F:
+            self.pressed_keys["is_infrared"] = not self.pressed_keys["is_infrared"]
 
     def keyReleaseEvent(self, event):
-        key_text = event.text().strip()
-        match key_text:
-            case "w" | "s":
-                self.pressed_keys["move_x"] = 0
-            case "d" | "a":
-                self.pressed_keys["move_y"] = 0
-            case "":
-                # Keyboard = Space und Control/Steuerung
-                if event.key() in [32, 16777249]:
-                    self.pressed_keys["move_z"] = 0
-            case "q" | "e":
-                self.pressed_keys["rotate"] = 0
+        key = event.key()
+
+        if key in self.KEY_MAP:
+            axis, direction = self.KEY_MAP[key]
+            # Nur zurücksetzen, wenn es noch in dieser Richtung aktiv war
+            if self.pressed_keys[axis] == direction:
+                self.pressed_keys[axis] -= direction
 
     def mousePressEvent(self, event):
-        self.isLeftMouseClicked = True
+        self.is_left_mouse_clicked = True
 
     def mouseReleaseEvent(self, event):
-        self.isLeftMouseClicked = False
+        self.is_left_mouse_clicked = False
 
     def wheelEvent(self, event):
         wheel_rot = event.angleDelta().y()
         self.pressed_keys["zoom"] += np.sign(wheel_rot)
-        self.pressed_keys["zoom"] = clamp(self.pressed_keys["zoom"], 0, 5)
+        self.pressed_keys["zoom"] = clamp(self.pressed_keys["zoom"], 0, 2)
 
     def update_loop(self):
-        if self.isLeftMouseClicked:
+        if self.is_left_mouse_clicked:
             pos = QCursor.pos()
             if self.last_mouse_pos is None:
                 self.last_mouse_pos = pos
                 return
-            dx = pos.x() - self.last_mouse_pos.x()
-            dy = pos.y() - self.last_mouse_pos.y()
-            self.pressed_keys["look_x"] = dx
-            self.pressed_keys["look_y"] = -1 * dy
+
+            sensitivity = 0.05
+            dx = (pos.x() - self.last_mouse_pos.x()) * sensitivity
+            dy = (pos.y() - self.last_mouse_pos.y()) * sensitivity
+
+            self.pressed_keys["look_x"] = clamp(dx, -1, 1)
+            self.pressed_keys["look_y"] = clamp(dy, -1, 1) * -1
             self.last_mouse_pos = pos
         else:
-            self.pressed_keys["look_x"] = 0
-            self.pressed_keys["look_y"] = 0
+            if not self.is_left_mouse_clicked and self.prev_is_left_mouse_clicked:
+                self.pressed_keys["look_x"] = 0
+                self.pressed_keys["look_y"] = 0
 
+        self.prev_is_left_mouse_clicked = self.is_left_mouse_clicked
         self.update_input()
 
     def update_input(self):
@@ -310,8 +318,8 @@ class MainWindow(QMainWindow):
             print(f"Send failed: {e}")
 
 def loop_controller(window):
-    while not window.controllerInput.done:
-        window.controllerInput.event_loop()
+    while not window.controller_input.done:
+        window.controller_input.event_loop()
     pygame.quit()
 
 def recv_all(conn, length):
