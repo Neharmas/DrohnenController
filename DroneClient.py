@@ -2,7 +2,7 @@ import sys
 import socket, cv2, struct
 
 
-def main(HOST, PORT=8080):
+def main(HOST, PORT=8080, cap=None):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         if ":" in HOST:
             IP, PORT = str(HOST.split(":")[0]), int(HOST.split(":")[1])
@@ -35,22 +35,20 @@ def main(HOST, PORT=8080):
 
                 # --- Check for incoming controller messages ---
                 try:
-                    msg = s.recv(1024)  # adjust buffer size as needed
+                    msg = s.recv(1024)
                     if msg:
-                        # Process controller input
                         print(msg.decode())
                     else:
-                        # Server closed connection
                         continue
                 except BlockingIOError:
                     pass
         except KeyboardInterrupt:
             print("Interrupted by user")
         finally:
-            cap.release()
+            if cap is not None:
+                cap.release()
             s.close()
             print("Lost connection to host")
-            return
 
 
 if __name__ == "__main__":
@@ -62,12 +60,9 @@ if __name__ == "__main__":
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 360)
 
     if len(sys.argv) == 3:
-        main(sys.argv[1], int(sys.argv[2]))
+        main(sys.argv[1], int(sys.argv[2]), cap)
     elif len(sys.argv) == 2:
-        main(sys.argv[1])
+        main(sys.argv[1], cap=cap)
     else:
-
-        print("Gib die IP-Adresse des Controllers ein: ")
-        HOST = input()
-        main(HOST)
-
+        HOST = input("Gib die IP-Adresse des Controllers ein: ")
+        main(HOST, cap=cap)

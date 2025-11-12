@@ -1,0 +1,1 @@
+1. Pakete installieren mit pip install -r requirements.txt

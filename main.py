@@ -1,6 +1,7 @@
 import math
 import sys
 import struct
+import time
 
 import cv2
 import numpy as np
@@ -37,11 +38,11 @@ class ControllerEvent:
         self.deadzone = 0.3
         self.controller_input_map = {
             "buttons": {
-                0:  ("move_z", -1),  # move_z_down
-                1:  ("move_z", +1),  # move_z_up
+                0:  ("move_z", -1),
+                1:  ("move_z", +1),
                 3:  ("is_infrared", "toggle"),
-                9:  ("rotate", +1),  # turn_left
-                10: ("rotate", -1),  # turn_right
+                9:  ("rotate", +1),
+                10: ("rotate", -1),
                 11: ("zoom", +1),
                 12: ("zoom", -1)
             },
@@ -61,9 +62,16 @@ class ControllerEvent:
             "is_infrared": False
         }
     def event_loop(self):
-        event_list = pygame.event.get()
-        if len(event_list) == 0:
+        try:
+            event_list = pygame.event.get()
+        except Exception:
             return
+
+        if not event_list:
+            return
+
+        prev_input = self.pressed_keys.copy()
+
         for event in event_list:
             event_type = event.type
 
@@ -71,8 +79,6 @@ class ControllerEvent:
             # 1541 -> JoyDeviceAdded event
             if event_type in [4352]:
                 return
-
-            prev_input = self.pressed_keys.copy()
 
             # --- Button pressed ---
             if event.type == pygame.JOYBUTTONDOWN:
@@ -85,43 +91,50 @@ class ControllerEvent:
                     self.pressed_keys["zoom"] = clamp(self.pressed_keys["zoom"], 0, 2)
 
             # --- Button released ---
-            if event.type == pygame.JOYBUTTONUP:
+            elif event.type == pygame.JOYBUTTONUP:
                 if event.button in self.controller_input_map["buttons"]:
                     key, value = self.controller_input_map["buttons"][event.button]
-                    if key not in ["is_infrared", "zoom"]:  # toggle bleibt wie er ist
+                    if key not in ["is_infrared", "zoom"]:
                         self.pressed_keys[key] -= value
 
             # --- Controller Achsen (analog sticks, trigger) ---
-            if event.type == pygame.JOYAXISMOTION:
+            elif event.type == pygame.JOYAXISMOTION:
                 if event.axis in self.controller_input_map["axes"]:
                     key = self.controller_input_map["axes"][event.axis]
                     value = event.value
 
-                    ## Invertiere X-/Y-Achsen vom Stick
+                    # Invertiere X-/Y-Achsen vom Stick
                     if event.axis == 1:
                         value *= -1
 
-                    # Deadzone anwenden
                     if abs(value) < self.deadzone:
                         value = 0
 
                     self.pressed_keys[key] = value
 
             # Handle hotplugging
-            if event_type == pygame.JOYDEVICEADDED:
-                # This event will be generated when the program starts for every
-                # joystick, filling up the list without needing to create them manually.
-                joy = pygame.joystick.Joystick(event.device_index)
-                joy.init()
-                self.joysticks.append(joy)
-                print(f"Joystick {joy.get_instance_id()} connected")
+            elif event_type == pygame.JOYDEVICEADDED:
+                try:
+                    joy = pygame.joystick.Joystick(event.device_index)
+                    joy.init()
+                    self.joysticks.append(joy)
+                    print(f"Joystick {joy.get_instance_id()} connected")
+                except Exception:
+                    pass
 
-            if event.type == pygame.JOYDEVICEREMOVED:
-                del self.joysticks[event.instance_id]
-                print(f"Joystick {event.instance_id} disconnected")
+            elif event_type == pygame.JOYDEVICEREMOVED:
+                try:
+                    inst_id = event.instance_id
+                    for idx, j in enumerate(self.joysticks):
+                        if hasattr(j, "get_instance_id") and j.get_instance_id() == inst_id:
+                            del self.joysticks[idx]
+                            break
+                    print(f"Joystick {inst_id} disconnected")
+                except Exception:
+                    pass
 
             if prev_input != self.pressed_keys:
-                self.window.pressed_keys = self.pressed_keys
+                self.window.pressed_keys = self.pressed_keys.copy()
 
 class MainWindow(QMainWindow):
     def __init__(self, bridge: SocketBridge):
@@ -131,12 +144,13 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(800, 600)
 
         self.conn = None
+
         # connect bridge signals
         bridge.client_connected.connect(self.set_client_connection)
         bridge.client_disconnected.connect(self.clear_client_connection)
         bridge.frame_received.connect(self.on_frame)
 
-        # Richtung der Tastendrucke (Taste → Key in pressed_keys + Richtung)
+        # Key presses (Taste → Key in pressed_keys + direction)
         self.KEY_MAP = {
             Qt.Key.Key_W: ("move_x", +1),
             Qt.Key.Key_S: ("move_x", -1),
@@ -168,7 +182,6 @@ class MainWindow(QMainWindow):
         # GUI
         central = QWidget(self)
         self.setCentralWidget(central)
-
         layout = QHBoxLayout(central)
 
         # Videofeed
@@ -219,7 +232,7 @@ class MainWindow(QMainWindow):
 
         if key in self.KEY_MAP:
             axis, direction = self.KEY_MAP[key]
-            # Nur erhöhen, wenn aktuell "neutral" in diese Richtung
+
             if self.pressed_keys[axis] == 0:
                 self.pressed_keys[axis] += direction
 
@@ -231,7 +244,7 @@ class MainWindow(QMainWindow):
 
         if key in self.KEY_MAP:
             axis, direction = self.KEY_MAP[key]
-            # Nur zurücksetzen, wenn es noch in dieser Richtung aktiv war
+
             if self.pressed_keys[axis] == direction:
                 self.pressed_keys[axis] -= direction
 
@@ -320,15 +333,20 @@ class MainWindow(QMainWindow):
 def loop_controller(window):
     while not window.controller_input.done:
         window.controller_input.event_loop()
+        time.sleep(0.001)
     pygame.quit()
 
 def recv_all(conn, length):
+    """Liest genau 'length' Bytes aus dem Socket oder gibt None zurück, falls Verbindung weg ist."""
     buf = b''
-    while len(buf) < length:
-        data = conn.recv(length - len(buf))
-        if not data:
-            return None
-        buf += data
+    try:
+        while len(buf) < length:
+            chunk = conn.recv(length - len(buf))
+            if not chunk:
+                return None
+            buf += chunk
+    except Exception:
+        return None
     return buf
 
 def handle_client(server_socket, bridge: SocketBridge):
