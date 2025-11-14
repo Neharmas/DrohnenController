@@ -1,4 +1,4 @@
-import math
+import json
 import sys
 import struct
 import time
@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 from PyQt6.QtCore import QObject, pyqtSignal, Qt, QTimer
 from PyQt6.QtGui import QImage, QPixmap, QCursor
-from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QMainWindow, QVBoxLayout, QHBoxLayout, QGraphicsView
+from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QMainWindow, QHBoxLayout, QGraphicsView
 import MapWidget
 
 import socket
@@ -24,6 +24,7 @@ class SocketBridge(QObject):
     client_connected = pyqtSignal(object)  # Signal mit dem Socket-Objekt
     client_disconnected = pyqtSignal(object)
     frame_received = pyqtSignal(bytes)
+    coord_data_received = pyqtSignal(dict)
 
 class ControllerEvent:
     def __init__(self, window):
@@ -149,6 +150,7 @@ class MainWindow(QMainWindow):
         bridge.client_connected.connect(self.set_client_connection)
         bridge.client_disconnected.connect(self.clear_client_connection)
         bridge.frame_received.connect(self.on_frame)
+        bridge.coord_data_received.connect(self.on_coord_data)
 
         # Key presses (Taste → Key in pressed_keys + direction)
         self.KEY_MAP = {
@@ -193,7 +195,7 @@ class MainWindow(QMainWindow):
         # === Minimap Overlay ===
         self.map_widget = MapWidget.MapWidgetNew()
         self.minimap = QGraphicsView(self.map_widget, self.video_label)
-        self.minimap.setStyleSheet("background: rgba(40, 40, 40, 122); border: solid; border-color: grey; border-width: 1px;")
+        self.minimap.setStyleSheet("background: rgba(40, 40, 40); border: solid; border-color: grey; border-width: 1px;")
         self.minimap.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.minimap.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.minimap.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -208,20 +210,6 @@ class MainWindow(QMainWindow):
         self.update_input()
 
         self.show()
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-
-        if hasattr(self, "minimap") and self.minimap is not None:
-            # Dynamische Größe (z. B. 20% der Videobreite)
-            video_width = self.video_label.width()
-            video_height = self.video_label.height()
-
-            #map_size = self.minimap.size().width()
-
-            # Position unten links im Video
-            #margin = 20
-            #self.minimap.move(margin, video_height - map_size - margin)
 
     def closeEvent(self, a0):
         self.controller_input.done = True
@@ -321,6 +309,10 @@ class MainWindow(QMainWindow):
             )
         )
 
+    def on_coord_data(self, data):
+        if "bodenpunkt" in data:
+            self.map_widget.update_field_of_view(data["bodenpunkt"])
+
     def send_input_data_over_socket(self, data):
         if not self.conn: # ✅ Check if connected
             return
@@ -358,14 +350,22 @@ def handle_client(server_socket, bridge: SocketBridge):
 
         try:
             while True:
-                len_bytes = recv_all(conn, 4)
-                if not len_bytes:
+                header = recv_all(conn, 5)
+                if not header:
                     break
-                length = struct.unpack(">I", len_bytes)[0]
-                frame_data = recv_all(conn, length)
-                if not frame_data:
+
+                msg_type, length = struct.unpack(">BI", header)
+                data = recv_all(conn, length)
+                if not data:
                     break
-                bridge.frame_received.emit(frame_data)
+                if msg_type == 0x01:
+                    bridge.frame_received.emit(data)
+                elif msg_type == 0x02:
+                    try:
+                        json_data = json.loads(data.decode("utf-8"))
+                        bridge.coord_data_received.emit(json_data)
+                    except Exception as e:
+                        print("⚠️ JSON parse error:", e)
 
         except Exception as e:
             print(f"⚠️ Client error: {e}")
