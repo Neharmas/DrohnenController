@@ -12,8 +12,9 @@ class MapWidgetNew(QGraphicsScene):
                               {'x': 0, 'y': 0}]
         self.grid_size = 10
         self.drone_size = 10
+        self.animal_size = 10
         self.flown_path = []
-        self.animal_positions = []
+        self.animal_position = [0.0, 0.0]
         self.setSceneRect(-5000, -5000, 10000, 10000)
 
     def update_drone_position(self, position):
@@ -29,7 +30,8 @@ class MapWidgetNew(QGraphicsScene):
         self.update()
 
     def update_animal_positions(self, position):
-        self.animal_positions = position
+        self.animal_position[0] = position["x"]
+        self.animal_position[1] = position["y"]
         self.update()
 
     def to_QPointF(self, coordinate):
@@ -68,3 +70,9 @@ class MapWidgetNew(QGraphicsScene):
         painter.setBrush(QColor(255, 0, 0))
         visual_drone_position = [int(self.drone_position[0] - self.drone_size/2), int(self.drone_position[1] - self.drone_size/2)]
         painter.drawEllipse(visual_drone_position[0], visual_drone_position[1], self.drone_size, self.drone_size)
+
+        # Draw animal position
+        painter.setBrush(QColor(0, 0, 0))
+        visual_animal_position = [int(self.animal_position[0] - self.animal_size / 2),
+                                 int(self.animal_position[1] - self.animal_size / 2)]
+        painter.drawEllipse(visual_animal_position[0], visual_animal_position[1], self.animal_size, self.animal_size)

@@ -272,7 +272,10 @@ class MainWindow(QMainWindow):
     def update_input(self):
         data = ""
         for key, value in self.pressed_keys.items():
-            data += f"{key}: {value}\n"
+            if isinstance(value, float):
+                data += f"{key}: {round(value, 2)}\n"
+            else:
+                data += f"{key}: {value}\n"
         self.debug_input_label.setText(data)
         self.send_input_data_over_socket(data)
 
@@ -312,6 +315,9 @@ class MainWindow(QMainWindow):
     def on_coord_data(self, data):
         if "bodenpunkt" in data:
             self.map_widget.update_field_of_view(data["bodenpunkt"])
+        if "marker" in data:
+            self.map_widget.update_animal_positions(data["marker"])
+
 
     def send_input_data_over_socket(self, data):
         if not self.conn: # ✅ Check if connected
