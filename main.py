@@ -192,6 +192,8 @@ class MainWindow(QMainWindow):
         self.video_label.setStyleSheet("background-color: black;")
         layout.addWidget(self.video_label, stretch=1)
 
+
+
         # === Minimap Overlay ===
         self.map_widget = MapWidget.MapWidgetNew()
         self.minimap = QGraphicsView(self.map_widget, self.video_label)
@@ -208,6 +210,8 @@ class MainWindow(QMainWindow):
         self.debug_input_label.setStyleSheet("color: white; background-color: rgba(0,0,0,100); padding: 5px;")
         layout.addWidget(self.debug_input_label)
         self.update_input()
+
+        self.drone_pos = [0.0, 0.0]
 
         self.show()
 
@@ -265,6 +269,10 @@ class MainWindow(QMainWindow):
             if not self.is_left_mouse_clicked and self.prev_is_left_mouse_clicked:
                 self.pressed_keys["look_x"] = 0
                 self.pressed_keys["look_y"] = 0
+
+        #self.drone_pos = [self.drone_pos[0] + 5, 0]
+        #print(self.drone_pos)
+        #self.map_widget.update_drone_position(self.drone_pos)
 
         self.prev_is_left_mouse_clicked = self.is_left_mouse_clicked
         self.update_input()
