@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 from PyQt6.QtCore import QObject, pyqtSignal, Qt, QTimer
 from PyQt6.QtGui import QImage, QPixmap, QCursor
-from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QMainWindow, QHBoxLayout, QGraphicsView
+from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QMainWindow, QHBoxLayout
 import MapWidget
 
 import socket
@@ -63,10 +63,7 @@ class ControllerEvent:
             "is_infrared": False
         }
     def event_loop(self):
-        try:
-            event_list = pygame.event.get()
-        except Exception:
-            return
+        event_list = pygame.event.get()
 
         if not event_list:
             return
@@ -120,8 +117,8 @@ class ControllerEvent:
                     joy.init()
                     self.joysticks.append(joy)
                     print(f"Joystick {joy.get_instance_id()} connected")
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(e)
 
             elif event_type == pygame.JOYDEVICEREMOVED:
                 try:
@@ -131,8 +128,8 @@ class ControllerEvent:
                             del self.joysticks[idx]
                             break
                     print(f"Joystick {inst_id} disconnected")
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(e)
 
             if prev_input != self.pressed_keys:
                 self.window.pressed_keys = self.pressed_keys.copy()
@@ -193,17 +190,15 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.video_label, stretch=1)
 
 
-
         # === Minimap Overlay ===
-        self.map_widget = MapWidget.MapWidgetNew()
-        self.minimap = QGraphicsView(self.map_widget, self.video_label)
-        self.minimap.setStyleSheet("background: rgba(40, 40, 40); border: solid; border-color: grey; border-width: 1px;")
+        self.minimap = MapWidget.MapWidgetNew(self.video_label)
+        self.minimap.setStyleSheet("background-color: rgb(25, 36, 28)")
         self.minimap.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.minimap.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.minimap.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         padding = 10
-        self.minimap.setGeometry(padding, padding, 200, 200)  # top-left overlay
+        self.minimap.setGeometry(padding, padding, 250, 250)  # top-left overlay
 
         # === Debug Info ===
         self.debug_input_label = QLabel()
@@ -270,21 +265,21 @@ class MainWindow(QMainWindow):
                 self.pressed_keys["look_x"] = 0
                 self.pressed_keys["look_y"] = 0
 
-        #self.drone_pos = [self.drone_pos[0] + 5, 0]
-        #print(self.drone_pos)
-        #self.map_widget.update_drone_position(self.drone_pos)
+
+        ## DEBUG MINIMAP TESTING
+        self.drone_pos[1] -= self.pressed_keys["move_x"]
+        self.drone_pos[0] -= self.pressed_keys["move_y"]
+        self.minimap.update_drone_position({"x": self.drone_pos[0], "y": self.drone_pos[1]})
 
         self.prev_is_left_mouse_clicked = self.is_left_mouse_clicked
         self.update_input()
 
     def update_input(self):
-        data = ""
-        for key, value in self.pressed_keys.items():
+        data = self.pressed_keys.copy()
+        for key, value in data.items():
             if isinstance(value, float):
-                data += f"{key}: {round(value, 2)}\n"
-            else:
-                data += f"{key}: {value}\n"
-        self.debug_input_label.setText(data)
+                data[key] = round(value, 2)
+        self.debug_input_label.setText(str(data).replace(",", "\n")[1:-1])
         self.send_input_data_over_socket(data)
 
     def set_client_connection(self, conn):
@@ -322,16 +317,16 @@ class MainWindow(QMainWindow):
 
     def on_coord_data(self, data):
         if "bodenpunkt" in data:
-            self.map_widget.update_field_of_view(data["bodenpunkt"])
+            self.minimap.update_field_of_view(data["bodenpunkt"])
         if "marker" in data:
-            self.map_widget.update_animal_positions(data["marker"])
+            self.minimap.update_animal_positions(data["marker"])
 
 
     def send_input_data_over_socket(self, data):
         if not self.conn: # ✅ Check if connected
             return
         try:
-            self.conn.send(bytes(data, "utf-8"))
+            self.conn.send(json.dumps(data).encode("utf-8"))
         except Exception as e:
             self.conn = None
             print(f"Send failed: {e}")
@@ -351,14 +346,15 @@ def recv_all(conn, length):
             if not chunk:
                 return None
             buf += chunk
-    except Exception:
+    except Exception as e:
+        print(f"Recv failed: {e}")
         return None
     return buf
 
 def handle_client(server_socket, bridge: SocketBridge):
     while True:
         conn, addr = server_socket.accept()
-        print(f"🔗 Connected by: {addr}")
+        print(f"Connected by: {addr}")
 
         bridge.client_connected.emit(conn)
 
@@ -379,7 +375,7 @@ def handle_client(server_socket, bridge: SocketBridge):
                         json_data = json.loads(data.decode("utf-8"))
                         bridge.coord_data_received.emit(json_data)
                     except Exception as e:
-                        print("⚠️ JSON parse error:", e)
+                        print("JSON parse error:", e)
 
         except Exception as e:
             print(f"⚠️ Client error: {e}")
