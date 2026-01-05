@@ -21,7 +21,7 @@ def normalize_input(left, right):
     return left * -1 + right
 
 class SocketBridge(QObject):
-    client_connected = pyqtSignal(object)  # Signal mit dem Socket-Objekt
+    client_connected = pyqtSignal(object)
     client_disconnected = pyqtSignal(object)
     frame_received = pyqtSignal(bytes)
     coord_data_received = pyqtSignal(dict)
@@ -41,7 +41,6 @@ class ControllerEvent:
             "buttons": {
                 0:  ("move_z", -1),
                 1:  ("move_z", +1),
-                3:  ("is_infrared", "toggle"),
                 9:  ("rotate", +1),
                 10: ("rotate", -1),
                 11: ("zoom", +1),
@@ -59,9 +58,9 @@ class ControllerEvent:
             ## Drone Body
             "move_z": 0, "move_y": 0, "move_x": 0, "rotate": 0,
             ## Camera
-            "look_x": 0, "look_y": 0, "zoom": 0,
-            "is_infrared": False
+            "look_x": 0, "look_y": 0, "zoom": 3
         }
+
     def event_loop(self):
         event_list = pygame.event.get()
 
@@ -78,30 +77,30 @@ class ControllerEvent:
             if event_type in [4352]:
                 return
 
-            # --- Button pressed ---
+            # Button pressed
             if event.type == pygame.JOYBUTTONDOWN:
                 if event.button in self.controller_input_map["buttons"]:
                     key, value = self.controller_input_map["buttons"][event.button]
-                    if key == "is_infrared":
-                        self.pressed_keys[key] = not self.pressed_keys[key]
+                    if key == "zoom":
+                        self.pressed_keys[key] -= value
                     else:
                         self.pressed_keys[key] += value
-                    self.pressed_keys["zoom"] = clamp(self.pressed_keys["zoom"], 0, 2)
+                    self.pressed_keys["zoom"] = clamp(self.pressed_keys["zoom"], 1, 3)
 
-            # --- Button released ---
+            # Button released
             elif event.type == pygame.JOYBUTTONUP:
                 if event.button in self.controller_input_map["buttons"]:
                     key, value = self.controller_input_map["buttons"][event.button]
-                    if key not in ["is_infrared", "zoom"]:
+                    if key != "zoom":
                         self.pressed_keys[key] -= value
 
-            # --- Controller Achsen (analog sticks, trigger) ---
+            # Controller axes (analog sticks, trigger)
             elif event.type == pygame.JOYAXISMOTION:
                 if event.axis in self.controller_input_map["axes"]:
                     key = self.controller_input_map["axes"][event.axis]
                     value = event.value
 
-                    # Invertiere X-/Y-Achsen vom Stick
+                    # Invert X-/Y-axes from stick
                     if event.axis == 1:
                         value *= -1
 
@@ -149,7 +148,7 @@ class MainWindow(QMainWindow):
         bridge.frame_received.connect(self.on_frame)
         bridge.coord_data_received.connect(self.on_coord_data)
 
-        # Key presses (Taste → Key in pressed_keys + direction)
+        # Key presses (Taste → Key in pressed_keys, direction)
         self.KEY_MAP = {
             Qt.Key.Key_W: ("move_x", +1),
             Qt.Key.Key_S: ("move_x", -1),
@@ -162,11 +161,10 @@ class MainWindow(QMainWindow):
         }
 
         self.pressed_keys = {
-            ## Drone Body
+            # Drone Body
             "move_z": 0, "move_y": 0, "move_x": 0, "rotate": 0,
-            ## Camera
-            "look_x": 0, "look_y": 0, "zoom": 0,
-            "is_infrared": False
+            # Camera
+            "look_x": 0, "look_y": 0, "zoom": 3
         }
 
         self.is_left_mouse_clicked = False
@@ -186,12 +184,11 @@ class MainWindow(QMainWindow):
         # Videofeed
         self.video_label = QLabel("Kein Video...")
         self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.video_label.setStyleSheet("background-color: black;")
+        self.video_label.setStyleSheet("background-color: black; font-size: 25px")
         layout.addWidget(self.video_label, stretch=1)
 
-
-        # === Minimap Overlay ===
-        self.minimap = MapWidget.MapWidgetNew(self.video_label)
+        # Minimap Overlay
+        self.minimap = MapWidget.MapWidget(self.video_label)
         self.minimap.setStyleSheet("background-color: rgb(25, 36, 28)")
         self.minimap.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.minimap.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -200,14 +197,13 @@ class MainWindow(QMainWindow):
         padding = 10
         self.minimap.setGeometry(padding, padding, 250, 250)  # top-left overlay
 
-        # === Debug Info ===
+        # Debug Info
         self.debug_input_label = QLabel()
         self.debug_input_label.setStyleSheet("color: white; background-color: rgba(0,0,0,100); padding: 5px;")
-        layout.addWidget(self.debug_input_label)
+        #layout.addWidget(self.debug_input_label)
+        #self.drone_pos = [0.0, 0.0]
+
         self.update_input()
-
-        self.drone_pos = [0.0, 0.0]
-
         self.show()
 
     def closeEvent(self, a0):
@@ -222,9 +218,6 @@ class MainWindow(QMainWindow):
 
             if self.pressed_keys[axis] == 0:
                 self.pressed_keys[axis] += direction
-
-        elif key == Qt.Key.Key_F:
-            self.pressed_keys["is_infrared"] = not self.pressed_keys["is_infrared"]
 
     def keyReleaseEvent(self, event):
         key = event.key()
@@ -243,8 +236,8 @@ class MainWindow(QMainWindow):
 
     def wheelEvent(self, event):
         wheel_rot = event.angleDelta().y()
-        self.pressed_keys["zoom"] += np.sign(wheel_rot)
-        self.pressed_keys["zoom"] = clamp(self.pressed_keys["zoom"], 0, 2)
+        self.pressed_keys["zoom"] -= int(np.sign(wheel_rot))
+        self.pressed_keys["zoom"] = clamp(self.pressed_keys["zoom"], 1, 3)
 
     def update_loop(self):
         if self.is_left_mouse_clicked:
@@ -265,11 +258,10 @@ class MainWindow(QMainWindow):
                 self.pressed_keys["look_x"] = 0
                 self.pressed_keys["look_y"] = 0
 
-
         ## DEBUG MINIMAP TESTING
-        self.drone_pos[1] -= self.pressed_keys["move_x"]
-        self.drone_pos[0] -= self.pressed_keys["move_y"]
-        self.minimap.update_drone_position({"x": self.drone_pos[0], "y": self.drone_pos[1]})
+        #self.drone_pos[1] -= self.pressed_keys["move_x"]
+        #self.drone_pos[0] -= self.pressed_keys["move_y"]
+        #self.minimap.update_drone_position({"x": self.drone_pos[0], "y": self.drone_pos[1]})
 
         self.prev_is_left_mouse_clicked = self.is_left_mouse_clicked
         self.update_input()
@@ -283,12 +275,10 @@ class MainWindow(QMainWindow):
         self.send_input_data_over_socket(data)
 
     def set_client_connection(self, conn):
-        """Wird vom Signal aufgerufen (Hauptthread)."""
         self.conn = conn
         print("Client im GUI registriert.")
 
     def clear_client_connection(self):
-        """Kann aufgerufen werden, wenn Verbindung beendet wird."""
         self.conn = None
 
         self.video_label.clear()
@@ -321,7 +311,6 @@ class MainWindow(QMainWindow):
         if "marker" in data:
             self.minimap.update_animal_positions(data["marker"])
 
-
     def send_input_data_over_socket(self, data):
         if not self.conn: # ✅ Check if connected
             return
@@ -329,7 +318,7 @@ class MainWindow(QMainWindow):
             self.conn.send(json.dumps(data).encode("utf-8"))
         except Exception as e:
             self.conn = None
-            print(f"Send failed: {e}")
+            print(f"Senden Fehlgeschlagen: {e}")
 
 def loop_controller(window):
     while not window.controller_input.done:
@@ -338,7 +327,6 @@ def loop_controller(window):
     pygame.quit()
 
 def recv_all(conn, length):
-    """Liest genau 'length' Bytes aus dem Socket oder gibt None zurück, falls Verbindung weg ist."""
     buf = b''
     try:
         while len(buf) < length:
@@ -347,14 +335,14 @@ def recv_all(conn, length):
                 return None
             buf += chunk
     except Exception as e:
-        print(f"Recv failed: {e}")
+        print(f"Empfang fehlgeschlagen: {e}")
         return None
     return buf
 
 def handle_client(server_socket, bridge: SocketBridge):
     while True:
         conn, addr = server_socket.accept()
-        print(f"Connected by: {addr}")
+        print(f"Verbunden mit: {addr}")
 
         bridge.client_connected.emit(conn)
 
@@ -382,7 +370,7 @@ def handle_client(server_socket, bridge: SocketBridge):
 
         finally:
             conn.close()
-            print(f"❌ Connection closed: {addr}")
+            print(f"❌ Verbindung geschlossen: {addr}")
             bridge.client_disconnected.emit(conn)
 
 def create_socket():

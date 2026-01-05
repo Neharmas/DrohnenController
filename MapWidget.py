@@ -3,7 +3,7 @@ from PyQt6.QtGui import QColor, QPolygonF, QBrush, QPen
 from PyQt6.QtCore import QPointF, QLineF
 
 
-class MapWidgetNew(QGraphicsView):
+class MapWidget(QGraphicsView):
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -110,22 +110,23 @@ class MapWidgetNew(QGraphicsView):
         pen_axis.setWidth(2)
 
 
-        # Vertical lines
+        # Vertical lines - Small
         for x in range(-bounds, bounds, spacing):
             self.scene.addLine(x, -bounds, x, bounds, pen_fine)
 
-        # Horizontal lines
+        # Horizontal lines - Small
         for y in range(-bounds, bounds, spacing):
             self.scene.addLine(-bounds, y, bounds, y, pen_fine)
 
-        # Vertical lines
+        # Vertical lines - Big
         for x in range(-bounds, bounds, spacing * 2):
             self.scene.addLine(x, -bounds, x, bounds, pen_thick)
 
-        # Horizontal lines
+        # Horizontal lines - Big
         for y in range(-bounds, bounds, spacing * 2):
             self.scene.addLine(-bounds, y, bounds, y, pen_thick)
 
+        # XY-Axes at 0
         self.scene.addLine(-bounds, 0, bounds, 0, pen_axis)
         self.scene.addLine(0, -bounds, 0, bounds, pen_axis)
 
