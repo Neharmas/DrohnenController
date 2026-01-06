@@ -131,12 +131,10 @@ class MapWidget(QGraphicsView):
         self.scene.addLine(0, -bounds, 0, bounds, pen_axis)
 
 def to_QPolygonF(points):
-    return QPolygonF([
-        to_QPointF(points[0]),
-        to_QPointF(points[1]),
-        to_QPointF(points[2]),
-        to_QPointF(points[3])
-    ])
+    polygon = QPolygonF()
+    for coord in points:
+        polygon.append(to_QPointF(coord))
+    return polygon
 
 def to_QPointF(coordinate):
     return QPointF(coordinate["x"], coordinate["y"])
