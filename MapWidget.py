@@ -98,7 +98,7 @@ class MapWidget(QGraphicsView):
         self.scene.setSceneRect(-bounds, -bounds, size, size)
 
         pen_fine = QPen(QColor(50, 168, 82, 20))
-        pen_fine.setCosmetic(True)  # stays 1px regardless of zoom
+        pen_fine.setCosmetic(True)
         pen_fine.setWidth(1)
 
         pen_thick = QPen(QColor(50, 168, 82))

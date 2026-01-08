@@ -58,7 +58,7 @@ class ControllerEvent:
             ## Drone Body
             "move_z": 0, "move_y": 0, "move_x": 0, "rotate": 0,
             ## Camera
-            "look_x": 0, "look_y": 0, "zoom": 3
+            "look_x": 0, "look_y": 0, "zoom": 1
         }
 
     def event_loop(self):
@@ -164,7 +164,7 @@ class MainWindow(QMainWindow):
             # Drone Body
             "move_z": 0, "move_y": 0, "move_x": 0, "rotate": 0,
             # Camera
-            "look_x": 0, "look_y": 0, "zoom": 3
+            "look_x": 0, "look_y": 0, "zoom": 1
         }
 
         self.is_left_mouse_clicked = False
@@ -306,10 +306,12 @@ class MainWindow(QMainWindow):
         )
 
     def on_coord_data(self, data):
-        if "bodenpunkt" in data:
-            self.minimap.update_field_of_view(data["bodenpunkt"])
+        if "blickpunkt" in data:
+            self.minimap.update_field_of_view(data["blickpunkt"])
         if "marker" in data:
             self.minimap.update_animal_positions(data["marker"])
+        if "xyz" in data:
+            self.minimap.update_drone_position(data["xyz"])
 
     def send_input_data_over_socket(self, data):
         if not self.conn: # ✅ Check if connected
