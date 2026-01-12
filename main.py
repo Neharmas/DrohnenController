@@ -306,8 +306,8 @@ class MainWindow(QMainWindow):
         )
 
     def on_coord_data(self, data):
-        if "blickpunkt" in data:
-            self.minimap.update_field_of_view(data["blickpunkt"])
+        if "sichtfeld" in data:
+            self.minimap.update_field_of_view(data["sichtfeld"])
         if "marker" in data:
             self.minimap.update_animal_positions(data["marker"])
         if "xyz" in data:
