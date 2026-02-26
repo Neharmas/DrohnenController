@@ -317,7 +317,8 @@ class MainWindow(QMainWindow):
         if not self.conn: # ✅ Check if connected
             return
         try:
-            self.conn.send(json.dumps(data).encode("utf-8"))
+            message = json.dumps(data) + "\n"
+            self.conn.sendall(message.encode("utf-8"))
         except Exception as e:
             self.conn = None
             print(f"Senden Fehlgeschlagen: {e}")
